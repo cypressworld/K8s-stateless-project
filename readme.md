@@ -236,3 +236,21 @@ Notice that the Service targeting selector only points to app: myapp, tier: fron
 
 *********************************
 
+
+Mini Verification Checklist
+
+For every Kubernetes project you deploy online:
+
+kubectl get nodes
+
+kubectl get deployments
+
+kubectl get pods
+
+kubectl get svc
+
+kubectl describe pod <pod-name>
+
+kubectl logs <pod-name>
+
+kubectl get events
