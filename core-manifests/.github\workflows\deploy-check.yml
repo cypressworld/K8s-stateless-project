@@ -1,0 +1,15 @@
+name: K8s Blueprint Lint Validation
+on: [push, pull_request]
+
+jobs:
+  validate-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull Code Base From GitHub
+        uses: actions/checkout@v4
+
+      - name: Validate Deployment YAML Syntax Integrity
+        run: |
+          python3 -c "import yaml; yaml.safe_load(open('core-manifests/01-deployment.yaml'))"
+          python3 -c "import yaml; yaml.safe_load(open('core-manifests/02-service.yaml'))"
+          echo "✅ YAML manifest formatting checks passed successfully!"
