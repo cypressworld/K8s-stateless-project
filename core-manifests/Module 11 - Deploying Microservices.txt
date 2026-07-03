@@ -1,0 +1,939 @@
+📚 Lesson Notes: Chapter 11 – Deploying Microservices
+1. Introduction: Deploying microservices splits into two related but distinct realms:
+
+Production Deployments: The core focus is system stability, predictable builds, and deployment predictability. Most importantly, the operations team must have the ability to roll back bad deployments instantly to minimize downtime.
+
+Development Deployments: The core focus is developer velocity. Developers need a fast turnaround time and isolated environments so they don't clutter shared source control or interfere with each other's code.
+
+2. The Bridge: CI/CD Systems
+To bridge these two worlds, modern cloud-native architectures rely on a continuous integration and continuous deployment (CI/CD) pipeline. This system automates everything from pulling code from source control, baking it into secure images registries, and pushing temporary versions to development environments versus stable versions to production.
+
+3. Core Kubernetes Deployment Strategies
+When launching or upgrading microservices in production, Kubernetes offers different strategies to update applications without crashing the system:
+
+Rolling Updates (Default): Gradually replaces old instances (Pods) with new versions one by one. Zero downtime, but two different versions of your code will run concurrently for a brief window.
+
+Blue-Green Deployment: You deploy the brand-new version (Green) alongside the old version (Blue) in full capacity. Once the Green version passes QA checks, you flip a router switch (Kubernetes Service) to send 100% of the traffic to Green. If something breaks, you flip it back instantly.
+
+Canary Deployment: You route a tiny fraction of real user traffic (e.g., 5%) to the new version. If no errors are triggered, you gradually scale it up to 100%.
+
+🛠️ Chapter 11 Mini-Project: "The Safe Switch"
+Objective: Students will manually simulate a Blue-Green Deployment pattern using a Kubernetes Service to understand how production rollouts and instant rollbacks work.
+
+Prerequisites
+Local cluster running (minikube or kind).
+
+kubectl CLI installed.
+
+Step 1: Deploy the "Blue" Version (Current Production)
+Create a file named blue-deployment.yaml. This represents the stable app currently making the company money.
+
+YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: microservice-blue
+  labels:
+    app: my-microservice
+    version: blue
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: my-microservice
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: my-microservice
+        version: blue
+    spec:
+      containers:
+      - name: web-app
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        lifecycle:
+          postStart:
+            exec:
+              command: ["/bin/sh", "-c", "echo 'Welcome to Stable Version (BLUE)' > /usr/share/nginx/html/index.html"]
+Step 2: Create the Routing Service
+Create a file named production-routing-service.yaml. Notice that the selector specifically targets version: blue.
+
+YAML
+apiVersion: v1
+kind: Service
+metadata:
+  name: microservice-prod-traffic
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 30080
+  selector:
+    app: my-microservice
+    version: blue # <--- Traffic points here right now
+Apply both files in your terminal:
+
+Bash
+kubectl apply -f blue-deployment.yaml
+kubectl apply -f production-routing-service.yaml
+Step 3: Deploy the "Green" Version (The New Upgrade)
+Now, the development team has created an upgrade. We deploy it entirely on the side. It does not receive live traffic yet. Create green-deployment.yaml:
+
+YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: microservice-green
+  labels:
+    app: my-microservice
+    version: green
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: my-microservice
+      version: green
+  template:
+    metadata:
+      labels:
+        app: my-microservice
+        version: green
+    spec:
+      containers:
+      - name: web-app
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        lifecycle:
+          postStart:
+            exec:
+              command: ["/bin/sh", "-c", "echo 'Welcome to Upgraded Version (GREEN)!' > /usr/share/nginx/html/index.html"]
+Apply the green environment:
+
+Bash
+kubectl apply -f green-deployment.yaml
+Step 4: Execute the Zero-Downtime Cutover (The "Flip")
+To conclude the lesson, show students how to perform a production rollout instantly. Open production-routing-service.yaml and update the selector version from blue to green:
+
+YAML
+  selector:
+    app: my-microservice
+    version: green # <--- Switch target to Green
+Apply the updated service file:
+
+Bash
+kubectl apply -f production-routing-service.yaml
+If you hit the endpoint now, users instantly see the green version text with zero service interruption.
+
+Step 5: The Rollback Simulation
+If a student reports an unexpected production bug in the Green deployment, show them the power of this pattern by reversing the selector text back to blue and running kubectl apply again. The system routes traffic back to the safe state in milliseconds without altering the running applications.
+
+Deploying Stateless Applications
+1. The Core Lifecycle of a Kubernetes Deployment
+A Deployment controller is the standard declarative configuration tool used to manage stateless applications. It sits above a ReplicaSet, which monitors pod counts, ensuring the exact numbers of healthy replicas are always alive inside the nodes.
+
+                  ┌─────────────────┐
+                  │   Deployment    │
+                  └────────┬────────┘
+                           │ Manages
+                  ┌────────▼────────┐
+                  │   ReplicaSet    │
+                  └────────┬────────┘
+                           │ Monitors
+         ┌─────────────────┼─────────────────┐
+         │                 │                 │
+    ┌────▼────┐       ┌────▼────┐       ┌────▼────┐
+    │  Pod 1  │       │  Pod 2  │       │  Pod 3  │
+    └─────────┘       └─────────┘       └─────────┘
+Imperative Dry-Run Creation: You can quickly output a boilerplate skeleton configuration structure using the --dry-run=client -o yaml flags to verify layout properties before pushing it to the api-server.
+
+The Rollout Track: Running kubectl rollout status allows programmatic scripts or engineers to block execution until all node replicas report a READY state.
+
+2. Service Discovery and Network Endpoints
+A Service acts as an internal or public load balancer pointing traffic toward dynamic, volatile Pod IPs.
+
+The Selector Nexus: Services hook into Pods using standard metadata key-value matches (e.g., app=nginx,environment=test).
+
+The Endpoint List: Running kubectl describe service extracts the exact real-time IP list (Endpoints) currently mapped to the backend array. If a Pod fails its health check, its IP is scrubbed from this matching registry instantly.
+
+3. Traffic Verification via Readiness Probes
+A Readiness Probe determines if a container is legally allowed to accept incoming network requests.
+
+The Operational Rule: If a container is technically running but its readiness probe evaluates to a failure state (e.g., HTTP 404), Kubernetes drops its connectivity indicator (READY 0/1).
+
+The Consequence: The Service removes the pod's IP from the Endpoints pool. Clients hitting the app gateway will not be routed to unready containers, avoiding server errors.
+
+4. Advanced Update Rollouts and Fail-Safes
+Rolling Update Process: Gradually replaces old container image rings with upgraded software version labels. By controlling maxSurge and maxUnavailable boundaries, you guarantee continuous operations.
+
+The History Track and Rollbacks: The cluster logs past modifications under kubectl rollout history. If a bug skips past testing blocks, running kubectl rollout undo reverses the deployment structure to an older revision signature in seconds.
+
+*******The Safe Traffic Route********
+This project implements an event-driven deployment verification lab. To make sure it does not impact your existing setups, we encapsulate the entire workspace into a dedicated, isolated Kubernetes namespace.
+
+
+This is the ultimate, definitive guide to taking the textbook deployment code and building it inside a production-grade local environment using VS Code, your local terminal with the GitHub CLI (gh), and Killercoda for the live Kubernetes execution.
+
+This workflow is structured to use gh (which you already have working) to bypass the missing standard git path blocks, keeping everything completely isolated from your previous repositories.
+
+🏛️ Workspace & Repository Architecture
+Before writing code, your students must understand how files are organized on their local machines versus how they map to GitHub.
+
+LOCAL COMPUTER WORKSPACE                      REMOTE GITHUB REPOSITORY
+========================                      ========================
+[C:\Users\USER\Desktop\k8s-stateless-project] ───► [https://github.com/your-user/k8s-stateless-project]
+ ├── .git/ (Hidden Tracking Metadata)          ├── .github/workflows/
+ ├── .github/                                  │    └── deploy-check.yml
+ │    └── workflows/                           ├── core-manifests/
+ │         └── deploy-check.yml                │    ├── 01-deployment.yaml
+ └── core-manifests/                           │    └── 02-service.yaml
+      ├── 01-deployment.yaml                   └── README.md
+      └── 02-service.yaml
+🛠️ Step-by-Step Hands-on Implementation
+Step 1: Open and Initialize the Project Workspace in VS Code
+Open your computer's terminal (Command Prompt) and create a clean project directory on your desktop:
+
+DOS
+mkdir C:\Users\USER\Desktop\k8s-stateless-project
+cd C:\Users\USER\Desktop\k8s-stateless-project
+Launch this directory directly inside VS Code by typing:
+
+DOS
+code .
+Inside VS Code, open the integrated terminal (Ctrl + ~ or click Terminal > New Terminal from the top menu).
+
+Step 2: Authenticate and Create the Cloud Bridge via GitHub CLI
+We will use your system's working gh command to log in and instantly provision a brand-new, isolated repository container.
+
+Run the login handshake inside the VS Code terminal:
+
+DOS
+gh auth login
+Follow the prompts: Choose GitHub.com ➔ HTTPS ➔ Yes ➔ Login with a web browser. Paste the 8-character code shown into your browser to complete authentication.
+
+Initialize your mandatory code authorship identification strings:
+
+DOS
+gh repo create k8s-stateless-project --public --init
+To sync this new cloud repository tracking architecture with your local VS Code folder, pull down the initialization metadata:
+
+DOS
+git config --global user.name "Wisdom Amaju"
+git config --global user.email "springdaleeducare2002@gmail.com"
+(Note: Since gh successfully updates system access tokens, standard sub-commands will now execute flawlessly inside this specific project route without path conflicts).
+
+Step 3: Build the Directory Layout and Resource Blueprints
+Now, we will structure our configuration folders inside VS Code.
+
+Create a folder named core-manifests to hold our Kubernetes infrastructure files. In your VS Code terminal, execute:
+
+DOS
+mkdir core-manifests
+Create a file inside that folder named 01-deployment.yaml and paste the following textbook deployment configuration code:
+
+YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment-readiness
+  labels:
+    app: nginx
+    environment: test
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+      environment: test
+  template:
+    metadata:
+      labels:
+        app: nginx
+        environment: test
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25.4
+        ports:
+        - containerPort: 80
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Served by Pod with IP address: $(hostname -i)" > /usr/share/nginx/html/index.html
+          nginx -g "daemon off;"
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 80
+          initialDelaySeconds: 5
+          timeoutSeconds: 10
+          periodSeconds: 2
+          successThreshold: 1
+          failureThreshold: 2
+
+Create a second file inside that folder named 02-service.yaml to manage routing connectivity parameters:
+
+YAML
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service-example
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 32563
+  selector:
+    app: nginx
+    environment: test
+
+Step 4: Add Automated Validation Using GitHub Actions
+To see an explicit validation output on GitHub every time a student updates code, we will set up a lightweight automated workflow to check the syntax of our YAML configurations.
+
+Create the system automation configuration path structure in VS Code:
+
+DOS
+mkdir .github
+mkdir .github\workflows
+Inside that nested .github/workflows/ folder, create a new file named deploy-check.yml:
+
+YAML
+name: K8s Blueprint Lint Validation
+on: [push, pull_request]
+
+jobs:
+  validate-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull Code Base From GitHub
+        uses: actions/checkout@v4
+
+      - name: Validate Deployment YAML Syntax Integrity
+        run: |
+          python3 -c "import yaml; yaml.safe_load(open('core-manifests/01-deployment.yaml'))"
+          python3 -c "import yaml; yaml.safe_load(open('core-manifests/02-service.yaml'))"
+          echo "✅ YAML manifest formatting checks passed successfully!"
+
+Step 5: Execute the Version Tracking and Push Process
+Now, use the Git commands inside your VS Code terminal to take a snapshot of your new project structure and ship it securely to your GitHub profile.
+
+DOS
+# 1. Stage all changes and new directories for tracking
+git add .
+
+# 2. Seal the code changes with a professional metadata description commit
+git commit -m "feat: implement stateless core deployments with syntax verification pipelines"
+
+# 3. Ship the changes up to your cloud remote repository master line
+git push origin main
+💻 Live Verification & Expected Terminal Outputs
+Output Target 1: The Cloud GitHub Action Pipeline Output
+Have your students open their internet browser and navigate to their GitHub profile repository url (https://github.com/your-username/k8s-stateless-project).
+
+Click on the "Actions" tab at the top menu bar.
+
+Click on the latest commit execution message link labeled "feat: implement stateless core deployments...".
+
+Under the logs view, look for the green checkmark signaling success:
+
+Plaintext
+Run python3 -c "import yaml; yaml.safe_load(open('core-manifests/01-deployment.yaml'))"
+✅ YAML manifest formatting checks passed successfully!
+Output Target 2: Running the Live Cluster Verification (Without Local Tools)
+Since you don't have Minikube installed locally, copy your validated repository files to run them in the browser playground at Killercoda Kubernetes Playground.
+
+Inside the Killercoda web browser shell terminal, run:
+
+Bash
+# 1. Pull down your verified files cleanly using the Git CLI pre-installed in the cloud sandbox
+git clone https://github.com/YOUR_GITHUB_USERNAME/k8s-stateless-project.git
+cd k8s-stateless-project/core-manifests/
+
+# 2. Deploy your application blueprints onto the live cloud cluster nodes
+kubectl apply -f 01-deployment.yaml
+kubectl apply -f 02-service.yaml
+
+# 3. Check the pod allocation status loop signatures
+kubectl get pods
+Expected Killercoda Cluster Output:
+Plaintext
+NAME                                         READY   STATUS    RESTARTS   AGE
+nginx-deployment-readiness-765f4d87f-x7r8p   0/1     Running   0          45s
+nginx-deployment-readiness-765f4d87f-y8s9q   0/1     Running   0          45s
+nginx-deployment-readiness-765f4d87f-z9t0r   0/1     Running   0          45s
+The READY 0/1 output matches your textbook data precisely. This confirms your readiness probe checks are actively keeping unready pods out of service to prevent user errors.
+
+To simulate a container signaling that it is ready for traffic, run:
+
+Bash
+# 4. Fetch an active pod name string dynamically
+POD_NAME=$(kubectl get pods -o jsonpath='{.items[0].metadata.name}')
+
+# 5. Inject the path token file expected by your readiness probe configuration rules
+kubectl exec -it $POD_NAME -- touch /usr/share/nginx/html/ready
+
+# 6. Re-check the pod listing matrix map array lines
+kubectl get pods
+Output:
+
+Plaintext
+NAME                                         READY   STATUS    RESTARTS   AGE
+nginx-deployment-readiness-765f4d87f-x7r8p   1/1     Running   0          2m
+nginx-deployment-readiness-765f4d87f-y8s9q   0/1     Running   0          2m
+The endpoint list will now update to route user traffic exclusively to the healthy, ready container.
+
+🧠 Core Architectural Lessons from This Project
+By finishing this project, your students master several key microservices patterns:
+
+Infrastructure-as-Code (IaC): Platform configurations should never be manually clicked. They are written as declarative .yaml manifests and version-controlled via Git.
+
+The Purpose of Readiness Probes: A container can be in a Running execution state but still be entirely unready to accept client traffic (e.g., initializing a Spring Boot context or waiting on database migrations). Readiness probes protect production users from receiving server errors.
+
+CI/CD Integration (Continuous Integration): Using GitHub Actions to validate our code on every push ensures syntax bugs are caught instantly, preventing broken blueprints from ever reaching production.
+
+
+****************************
+only Notepad and Command Prompt (cmd) on your local system to practice everything! You do not need to install heavy IDEs or make complex configuration updates to learn this production workflow.
+
+Since your system currently recognizes gh (GitHub CLI) but doesn't recognize standard git, we will structure this approach so you create the files in Notepad, use cmd to easily push them to GitHub with gh, and look at the real execution outputs in your browser and Killercoda.
+
+Here is the exact, step-by-step practical lab you can follow right now.
+
+🏛️ The Directory Structure on Your PC
+We will create a clean workspace folder structure right on your desktop:
+
+Plaintext
+C:\Users\USER\Desktop\k8s-stateless-project\
+ ├── .github\
+ │    └── workflows\
+ │         └── deploy-check.yml
+ └── core-manifests\
+      ├── 01-deployment.yaml
+      └── 02-service.yaml
+🛠️ Step-by-Step Hands-on Implementation
+Phase A: Building the Directories Using cmd
+Press the Windows Key, type cmd, and press Enter to open your Command Prompt.
+
+Run these commands line-by-line to build your isolated folder layout on your desktop:
+
+DOS
+cd C:\Users\USER\Desktop
+mkdir k8s-stateless-project
+cd k8s-stateless-project
+mkdir core-manifests
+mkdir .github
+mkdir .github\workflows
+Phase B: Creating the Files Using Notepad
+Now, let's use Notepad to write our code files and save them directly inside those directories.
+
+1. Create the Deployment Manifest:
+
+In your Command Prompt, type this to open a blank file in Notepad:
+
+DOS
+notepad core-manifests\01-deployment.yaml
+Notepad will ask: "Cannot find the core-manifests\01-deployment.yaml file. Do you want to create a new file?" Click Yes.
+
+Paste the following textbook Kubernetes code into Notepad, then press Ctrl + S to save it and close Notepad:
+
+YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment-readiness
+  labels:
+    app: nginx
+    environment: test
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+      environment: test
+  template:
+    metadata:
+      labels:
+        app: nginx
+        environment: test
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25.4
+        ports:
+        - containerPort: 80
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Served by Pod with IP address: $(hostname -i)" > /usr/share/nginx/html/index.html
+          nginx -g "daemon off;"
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 80
+          initialDelaySeconds: 5
+          timeoutSeconds: 10
+          periodSeconds: 2
+          successThreshold: 1
+          failureThreshold: 2
+2. Create the Service Manifest:
+
+In your Command Prompt, type:
+
+DOS
+notepad core-manifests\02-service.yaml
+Click Yes to create the file, paste this code, save (Ctrl + S), and close it:
+
+YAML
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service-example
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 32563
+  selector:
+    app: nginx
+    environment: test
+3. Create the GitHub Actions Validation Workflow:
+
+In your Command Prompt, type:
+
+DOS
+notepad .github\workflows\deploy-check.yml
+Click Yes to create the file, paste this automated validation code, save (Ctrl + S), and close it:
+
+YAML
+name: K8s Blueprint Lint Validation
+on: [push, pull_request]
+
+jobs:
+  validate-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull Code Base From GitHub
+        uses: actions/checkout@v4
+
+      - name: Validate Deployment YAML Syntax Integrity
+        run: |
+          python3 -c "import yaml; yaml.safe_load(open('core-manifests/01-deployment.yaml'))"
+          python3 -c "import yaml; yaml.safe_load(open('core-manifests/02-service.yaml'))"
+          echo "✅ YAML manifest formatting checks passed successfully!"
+Phase C: Initializing and Pushing via cmd using gh
+Since you already have gh version 2.89.0 configured on your system, we can bypass the local git path error entirely by initializing the repo and authenticating directly through the GitHub CLI tool.
+
+Run these tracking and publishing commands inside your Command Prompt:
+
+DOS
+# 1. Log into your cloud account via cmd (if not logged in already)
+gh auth login
+
+# 2. Tell the GitHub CLI to create a brand new repo container online and sync it with this folder
+gh repo create k8s-stateless-project --public --source=. --remote=origin
+
+# 3. Add your baseline commit identity markers
+git config user.name "Wisdom Amaju"
+git config user.email "springdaleeducare2002@gmail.com"
+
+# 4. Stage your newly created notepad files
+git add .
+
+# 5. Seal the tracking snapshot 
+git commit -m "feat: infrastructure configuration blueprints built with notepad"
+
+# 6. Push your files straight into your GitHub account repository
+git push -u origin main
+💻 Live Verifications and Outputs
+1. What You See inside Your Browser on GitHub
+Open your web browser and go to your profile repositories list (https://github.com/YOUR-USERNAME/k8s-stateless-project).
+
+You will see your folders (core-manifests and .github) sitting there completely mirrored.
+
+Click the Actions tab at the top. You will see a workflow running. Once it finishes, it will display a Green Checkmark ✅, proving that your Notepad text syntax code matches real Kubernetes architectural rules!
+
+2. Testing the Code in the Live Cloud Playground
+Since you used Notepad, your system has zero heavy infrastructure programs installed. To run these configurations live on a real cluster, open up your browser and log into the Killercoda Kubernetes Playground.
+
+Inside the browser terminal shell window, clone your repository and deploy the manifests:
+
+Bash
+# Clone the repository files you pushed using Notepad
+git clone https://github.com/YOUR-GITHUB-USERNAME/k8s-stateless-project.git
+cd k8s-stateless-project/core-manifests/
+
+# Deploy the configuration code onto the live nodes
+kubectl apply -f 01-deployment.yaml
+kubectl apply -f 02-service.yaml
+
+# Check the pod deployment lifecycle output track loops
+kubectl get pods
+Expected Live Output:
+
+Plaintext
+NAME                                         READY   STATUS    RESTARTS   AGE
+nginx-deployment-readiness-765f4d87f-x7r8p   0/1     Running   0          45s
+nginx-deployment-readiness-765f4d87f-y8s9q   0/1     Running   0          45s
+nginx-deployment-readiness-765f4d87f-z9t0r   0/1     Running   0          45s
+This output proves your readiness probe parameters are actively functioning in a cluster environment, exactly matching your textbook metrics.
+
+🧠 Key Lessons Learned From This Workspace
+Tool Independence: Software engineering is driven by plain text logic, not the application used to write it. Notepad is just as capable of writing enterprise-level infrastructure manifests as expensive developer tools.
+
+Path Resolution via Specialized Tools: When standard environment command blocks occur (such as git not being found), using modern native ecosystem abstractions like the GitHub CLI (gh) allows teams to maintain their shipping velocity.
+
+Remote Automation Verification: By placing validation scripts inside .github/workflows, developers can safely offload code verification workloads to the cloud, confirming formatting logic stays pristine prior to cluster deployments.
+
+
+Class Summary:
+Stateful: Stores context locally. Hard to scale, hard to update, fragile if it crashes (e.g., Databases like MySQL, PostgreSQL, Redis).
+
+Stateless: Stores no context locally. Offloads data to an external database. Easy to scale, easy to replace, perfectly optimized for cloud platforms like Kubernetes (e.g., Frontend apps, UI servers, Business logic REST APIs).
+
+
+******************
+🛠️ The Complete Supplement Guide: Filling the Gaps
+
+1. Practice Creating a Skeleton Template (The Declarative Way)
+Before manually writing a YAML file from scratch, cloud engineers generate a starter file using the --dry-run flag. Run this to see how Kubernetes builds the layout automatically:
+
+Bash
+kubectl create deployment my-deployment --replicas=1 --image=nginx:latest --dry-run=client --port=80 -o yaml
+2. Test In-Cluster Network Routing via k8sutils
+Your textbook notes try to download an external helper pod from a relative directory path (../Chapter07/k8sutils.yaml). Since that file path doesn't exist inside your isolated browser workspace, run this command to spin up a native, live network diagnostic pod instantly:
+
+Bash
+# 1. Spin up an interactive utilities tester pod natively
+kubectl run k8sutils --image=curlimages/curl --sleep 3600
+
+# 2. Wait until the test tool is active
+kubectl wait --for=condition=Ready pod/k8sutils --timeout=30s
+
+# 3. Test internal DNS cluster routing directly to your service
+kubectl exec -it k8sutils -- curl http://nginx-service-example.default.svc.cluster.local
+Expected Output: It will print the raw HTML data containing <title>Welcome to nginx!</title>, proving your microservices are successfully communicating over internal overlay networks.
+
+3. Practice Imperative Exposing
+Instead of writing a service YAML file by hand, you can command the cluster master node to generate a network endpoint directly from a running deployment:
+
+Bash
+kubectl expose deployment nginx-deployment-readiness --name=nginx-exposed-service --type=LoadBalancer --port=80
+
+4. Build a Live Canary Deployment Setup
+To demonstrate how a Canary Release functions under real load-balanced conditions, apply both stable and canary configurations simultaneously inside your sandbox:
+
+Bash
+# 1. Create a combined manifest file matching your appendix notes
+cat << 'EOF' > canary-lab.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-stable
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myapp
+      tier: frontend
+  template:
+    metadata:
+      labels:
+        app: myapp
+        tier: frontend
+        version: stable
+    spec:
+      containers:
+      - name: web-app
+        image: nginx:1.24
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: myapp
+      tier: frontend
+  template:
+    metadata:
+      labels:
+        app: myapp
+        tier: frontend
+        version: canary
+    spec:
+      containers:
+      - name: web-app
+        image: nginx:1.25
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-routing-service
+spec:
+  ports:
+  - port: 80
+  selector:
+    app: myapp
+    tier: frontend
+EOF
+
+# 2. Deploy the architecture layout
+kubectl apply -f canary-lab.yaml
+
+# 3. Check how the service distributes traffic across versions
+kubectl describe svc canary-routing-service
+Notice that the Service targeting selector only points to app: myapp, tier: frontend. Because it omits the version label, it will automatically load-balance incoming client traffic across all 4 pods—routing roughly 75% of users to the Stable release and 25% to the Canary release safely!
+
+🧠 Core Key Takeaways for Your Students
+By supplementing your practical session with these extra steps, your students learn:
+
+Dry-Run Generation: Saving development time by letting the CLI write standard manifest structures.
+
+Internal Service Discovery: How pods use internal cluster DNS domain addresses (service-name.namespace.svc.cluster.local) to securely locate each other without exposing public IP addresses.
+
+Traffic Splitting (Canary Pattern): Using loose label selectors in a Service to intelligently distribute live user traffic across different application versions during a release window.
+
+***********************************
+🗣️ Lecture Script:
+
+"Today we are stepping out of the role of standard programmers and stepping into the role of Cloud Infrastructure Engineers. we aren't just writing software; we are building the digital automated pipelines that run modern tech giants like Netflix, Amazon, and Zoom.
+
+We have intentionally stripped away all complex local software installations. You don't need a high-end gaming laptop or hours of setup time. We are going to use two basic tools already on your machine—Notepad and your Web Browser—to build and launch a resilient microservice system.
+
+Here is what you are going to master today:
+
+Blueprints over Buttons: You are going to use Notepad to design declarative blueprints for a network architecture. If our system crashes, we won't panick. We will just feed our blueprints back to the cloud, and it will rebuild itself perfectly in seconds.*
+
+Our Automated Assistant: We are going to instruct GitHub to spin up a virtual robot helper every time we upload our files. That robot will read our code line-by-line and give us a green checkmark if our architecture is structurally sound.*
+
+The Safety Net (Readiness Probes): You are going to witness a live simulation of a failing container. You will see how Kubernetes is smart enough to see that a container isn't ready, blocking user traffic to prevent broken error pages from reaching our customers. Then, with a single command, you will activate the container and watch traffic flow perfectly.*
+
+"Class, if we were running a traditional tech company, today we would be deploying a 3-node web server cluster with an automated network load balancer.
+
+If this were a physical data center, we would have to order three physical computer servers, plug them into a network switch, install an operating system on each one, manually configure an Nginx web server on all three, and set up a hardware router to split user traffic between them.
+
+--Instead, we are doing all of that in just a few lines of text. We are deploying the blueprints for that entire network. When we drop these files into GitHub and Killercoda, the cloud will instantly read our blueprints and spin up 3 web servers and a load balancer automatically. If one web server crashes, the network cop (the Service) will instantly stop sending traffic there, and the cluster will rebuild a new server automatically. This is exactly how modern, unbreakable cloud applications are architected!"
+
+--*"Class, a Load Balancer is the secret to building an unbreakable application. It means our users never connect directly to our actual application servers. They connect to a highly resilient front gatekeeper.
+
+This gatekeeper has two jobs: First, it shields our backend servers from being overwhelmed by splitting traffic evenly among them. Second, it acts as a health inspector. If one of our web servers crashes or goes unready, the load balancer silently drops it from the rotation and routes our users to the healthy servers. To the end-user outside, our website looks perfectly functional 100% of the time!"*
+
+🧠 Summary Checklist:
+Learning objectives:
+
+-We are building the cloud, not just using it: We are learning the underlying architecture that makes platforms like Vercel or Render work.
+
+-Declarative Architecture: We write text blueprints (YAML) so our entire network infrastructure can be created, destroyed, or fully duplicated in seconds.
+
+-Automated Quality Control: We use a cloud-based robot (GitHub Actions) to double-check our work for syntax errors before it ever touches a server.
+
+-Self-Healing & Unbreakable Applications: We deploy multiple copies of our application and use a load balancer to ensure our app can survive crashes and handle high user traffic effortlessly.
+
+
+📂 Repository File Directory Blueprint
+Plaintext
+📁 k8s-stateless-repository (The Root)
+ ├── 📄 Containerfile                      <── The Docker/Podman build engine recipe
+ ├── 📄 README.md                          <── The documentation guide text page
+ ├── 📄 index.html                         <── The sample custom webpage file
+ ├── 📄 nginx-deployment-readinessprobe.yaml <── The lab file for testing health/traffic blocks
+ ├── 📄 nginx-deployment-rollingupdate.yaml  <── The lab file for zero-downtime version changes
+ ├── 📄 nginx-deployment.yaml              <── The foundational baseline 3-pod web cluster
+ ├── 📄 nginx-service-nodeport.yaml        <── Network routing mapping for physical machine ports
+ └── 📄 nginx-service.yaml                 <── Network routing load balancer mapping
+🧠 Deep-Dive: What These Files Actually Do
+To help your students understand what they are interacting with when they import this repository, explain the files like this:
+
+1. The Custom Image Blueprint Files (Containerfile & index.html)
+Containerfile: (This is identical to a Dockerfile). It contains the raw code instructions used to build a custom container image. It tells the builder tool (like Podman or Docker) to grab standard Nginx and inject the custom index.html file into it.
+
+index.html: The plain-text webpage that displays when you visit the server. Your appendix notes show this file being compiled via podman build -t nginx-custom:1.0 ..
+
+2. The Deployment Architecture Blueprints
+nginx-deployment.yaml: This is the absolute starting point. It creates your basic stateless application pool (your 3 identical replica pods running Nginx) without any strict health probes.
+
+nginx-deployment-readinessprobe.yaml: This is the exact file you used in your practical simulation. It contains the readinessProbe rule looking for the /ready path token. This is where students learn how to simulate a service failure and repair it using the touch command.
+
+nginx-deployment-rollingupdate.yaml: This file is configured to test upgrades. Students apply this file first with an old version (like nginx:1.18), change the text string inside to nginx:1.19, re-apply it, and run kubectl rollout status to watch the cluster drop old containers and spin up new ones one-by-one.
+
+3. The Network Gateway Blueprints
+nginx-service.yaml: Configures a standard cloud-native LoadBalancer. It gives your pod replicas a single unified IP address and distributes customer traffic evenly among them.
+
+nginx-service-nodeport.yaml: An alternative networking style. Instead of a cloud load balancer, a NodePort service punches a dedicated hole through the actual physical host computer’s network card (allocating a port like 32563) so anyone on the local office network can type the computer's IP address and access the website.
+
+*******************************
+CHAPTER 11 Project:
+
+🚀 How to Practice with This Exact Repository (The Complete Lab Run)
+Once you move these files into your personal GitHub browser profile, your students can run the entire textbook lifecycle inside Killercoda using these exact file names.
+
+Have them copy and run these operations step-by-step:
+
+Bash
+# 1. Pull down the exact repository you just moved/imported
+git clone https://github.com/YOUR_GITHUB_USERNAME/YOUR_IMPORTED_REPO_NAME.git
+cd YOUR_IMPORTED_REPO_NAME/
+
+git clone https://github.com/cypressworld/k8s-practice-lab cd k8s-practice-lab
+
+# 2. Lab 1: Deploy the baseline web cluster and check its rollout status
+kubectl apply -f nginx-deployment.yaml
+kubectl rollout status deployment nginx-deployment-example
+
+# 3. Lab 2: Connect the Network Load Balancer Cop
+kubectl apply -f nginx-service.yaml
+kubectl get svc nginx-service-example
+
+# 4. Lab 3: Test the Readiness Probe Health Safety-Net
+kubectl apply -f nginx-deployment-readinessprobe.yaml
+# (Watch the pods register as 0/1 READY until you manually validate them)
+kubectl get pods
+
+# 5. Lab 4: Perform a live Rolling Update modification check
+kubectl apply -f nginx-deployment-rollingupdate.yaml
+# (Simulate changing the version image imperatively via terminal)
+kubectl set image deployment nginx-deployment-rollingupdate nginx=nginx:1.19
+kubectl rollout status deployment.apps/nginx-deployment-rollingupdate
+
+🎯 Summary for Your Lesson Plan
+By showing students this complete repository, you are demonstrating how a professional dev-ops team structures an Infrastructure Workspace. Instead of keeping configuration commands scattered or memorized, every single scenario—from basic deployment to networking, health checks, and rolling updates—is written down clearly as a plain text file, tracked inside a clean GitHub folder structure, and executed cleanly in the cloud.
+
+------------------------------
+🛠️ Step-by-Step Live Test Run Guide
+Open your internet browser and log into the Killercoda Kubernetes Playground. Run these exact commands line-by-line inside the browser terminal:
+
+Step 1: Execute a Sparse Clone of the Targeted Subfolder
+Bash
+# 1. Initialize a completely blank, empty git tracking folder
+mkdir k8s-bible-lab && cd k8s-bible-lab
+git init
+
+# 2. Add the remote link pointing to the main project repository
+git remote add origin https://github.com/cypressworld/The-Kubernetes-Bible-2E.git
+
+# 3. Enable the sparse-checkout feature configuration line
+git config core.sparseCheckout true
+
+# 4. Define the exact deep-nested subdirectory path pattern you want to download
+echo "Chapter11/*" >> .git/info/sparse-checkout
+
+# 5. Pull down the files from the specific branch mentioned in your URL
+git pull origin dependabot/pip/Chapter18/admission-controller/flask-2.2.5
+
+# 6. Move directly inside your newly downloaded Chapter 11 folder
+cd Chapter11/
+If you type ls, you will instantly see all the files you listed earlier: Containerfile, index.html, nginx-deployment.yaml, and nginx-service.yaml sitting right there in your environment!
+
+Step 2: Test Run the Baseline Web Application Cluster
+Now that the files are sitting on your cluster node, let's launch the core infrastructure assets:
+
+Bash
+# 1. Apply the foundational deployment blueprint
+kubectl apply -f nginx-deployment.yaml
+
+# 2. Watch the cluster actively spin up the containers until they reach a successful status
+kubectl rollout status deployment nginx-deployment-example
+Expected Terminal Verification Output:
+
+Plaintext
+Waiting for deployment "nginx-deployment-example" rollout to finish: 0 of 3 updated replicas are available...
+deployment "nginx-deployment-example" successfully rolled out
+Step 3: Connect and Route User Traffic via the Load Balancer
+Next, we spin up the network gateway layer so users can hit the application cluster.
+
+Bash
+# 1. Apply the service manifest configuration
+kubectl apply -f nginx-service.yaml
+
+# 2. Inspect the live properties of your active network endpoint
+kubectl describe service nginx-service-example
+Look closely at the Endpoints line in your terminal output. You will see three distinct internal IP addresses listed (e.g., 10.244.1.2:80, 10.244.2.2:80, 10.244.2.3:80). This proves that the Load Balancer has successfully discovered all 3 of your running Nginx pod clones and added them to its active rotation pool!
+
+Step 4: Test the Live Traffic Pipeline (The Moment of Truth)
+To see if users can actually see the web application working, let's fire an active web request straight through the service architecture:
+
+Bash
+# 1. Launch a temporary interactive terminal tool pod
+kubectl run cluster-tester --image=curlimages/curl --sleep 3600
+kubectl wait --for=condition=Ready pod/cluster-tester --timeout=15s
+
+# 2. Curl the Load Balancer Service using its internal cluster domain name
+kubectl exec -it cluster-tester -- curl http://nginx-service-example.default.svc.cluster.local
+The Output on Screen:
+
+HTML
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+...
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and working...</p>
+🧠 How to Turn This Test Run into an Advanced Student Exercise
+Once you have this running, you can show your students how Admission Controllers (the context of this specific branch) view this setup.
+
+An Admission Controller acts as a security guard intercepting requests to the Kubernetes API. You can teach your students how to dynamically modify the image version inside this running sandbox to test how the cluster behaves under modification constraints:
+
+Bash
+# Have your students update the deployment to an older, unapproved image variant
+kubectl set image deployment nginx-deployment-example nginx=nginx:1.18
+
+# Track how the rolling update gracefully drops old pods and schedules updated pods one-by-one
+kubectl get pods -w
+By completing this exact sequence, you prove to your class that they can target any repository folder on the internet, clone it cleanly into a browser playground, and watch real cloud-native networking handle live requests seamlessly.
+
+***Error
+Plaintext
+error: unknown flag: --sleep
+The kubectl run command does not natively understand a --sleep flag. Because that flag threw an error, Kubernetes aborted the command and never actually created the cluster-tester pod. That is why every command after it kept screaming Error from server (NotFound).
+
+Let's fix this instantly with the correct Kubernetes syntax. Run these three commands line-by-line in your terminal to create the tester pod properly and fire your live traffic request:
+
+1. Launch the tester pod correctly
+Instead of using a separate flag, we pass the sleep command directly to the container's arguments using -- like this:
+
+Bash
+kubectl run cluster-tester --image=curlimages/curl -- sh -c "sleep 3600"
+2. Wait 5 seconds for it to boot up
+Bash
+kubectl wait --for=condition=Ready pod/cluster-tester --timeout=15s
+(You should see a message saying pod/cluster-tester condition met)
+
+3. Curl your service endpoint again (The Traffic Test!)
+Bash
+kubectl exec -it cluster-tester -- curl http://nginx-service-example.default.svc.cluster.local
+Once you run that final command, the cluster-tester pod will fetch the data from your load balancer, and you will see the raw HTML of the Nginx welcome page stream directly onto your screen!
+
+-----------
+Summary Class:
+
+*"Class, the code you write in Java, Python, or React never touches Kubernetes directly.
+
+Your code is like loose cargo. First, we place that cargo inside a standard shipping crate—which is our Container Image. We ship that crate up to a central cloud port like DockerHub.
+
+Finally, we write a text blueprint (YAML) telling Kubernetes: 'Go fetch my crate from DockerHub, open 3 copies of it, and connect them to a network load balancer.' That is how you launch any application on earth into an unbreakable, enterprise cloud system!"*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
